@@ -100,56 +100,73 @@ const printLabels = async (items) => {
 
 
 
-// ─── Print button: Niimbot direct or PDF fallback ────────────────────────────
+// ─── Print button — Safari/iOS compatible ────────────────────────────────────
+// Generates label images and lets user share directly to Niimbot app or save
 function PrintButton({ items, small=false }) {
-  const [status, setStatus] = useState(null); // null | "printing" | "done" | "error"
-  const [errMsg, setErrMsg] = useState("");
-  const [showMenu, setShowMenu] = useState(false);
+  const [status, setStatus] = useState(null);
+  const [imgModal, setImgModal] = useState(null); // { images: [{dataUrl, label}] }
 
-  const hasWebBT = !!navigator.bluetooth;
-
-  const doPDF = async () => {
-    setShowMenu(false);
-    await printLabels(items);
-  };
-
-  const doNiimbot = async () => {
-    setShowMenu(false);
-    setStatus("printing");
-    try {
-      for (const item of items) {
-        const dataUrl = await printToNiimbot(item);
-        await niimbotPrint(dataUrl, 50, 30);
-      }
-      setStatus("done");
-      setTimeout(()=>setStatus(null), 3000);
-    } catch(e) {
-      setErrMsg(e.message||"Error de impresión");
-      setStatus("error");
-      setTimeout(()=>setStatus(null), 5000);
+  const generateImages = async () => {
+    setStatus("generating");
+    const images = [];
+    for (const item of items) {
+      const dataUrl = await printToNiimbot(item);
+      const cod = item.isKit ? (item.name||item.codigo) : item.codigo;
+      const sn  = item.isKit ? (item.parts||[]).map(p=>p.serial).join("+") : item.serial;
+      images.push({ dataUrl, label: `${cod} · SN:${sn}` });
     }
+    setStatus(null);
+    setImgModal({ images });
   };
 
-  if (status==="printing") return <Btn disabled small={small}>⏳ Imprimiendo...</Btn>;
-  if (status==="done")     return <Btn variant="success" small={small}>✓ Impreso</Btn>;
-  if (status==="error")    return <div style={{fontSize:12,color:"#dc2626",maxWidth:260}}>⚠ {errMsg}</div>;
+  if (status==="generating") return <Btn disabled small={small}>⏳ Generando...</Btn>;
 
   return (
-    <div style={{position:"relative",display:"inline-block"}}>
-      <div style={{display:"flex",gap:0}}>
-        <Btn small={small} onClick={hasWebBT ? doNiimbot : doPDF} style={{borderRadius:0}}>
-          🖨️ {hasWebBT?"Imprimir en B1":"Abrir PDF"}
-        </Btn>
-        <button onClick={()=>setShowMenu(v=>!v)} style={{background:"#000",border:"none",borderLeft:"1px solid #333",color:"#fff",padding:small?"4px 8px":"8px 10px",cursor:"pointer",fontSize:12}}>▾</button>
-      </div>
-      {showMenu && (
-        <div style={{position:"absolute",bottom:"100%",left:0,background:"#fff",border:"1px solid #e2e8f0",borderRadius:8,boxShadow:"0 4px 20px rgba(0,0,0,.15)",zIndex:100,minWidth:200,overflow:"hidden"}}>
-          {hasWebBT && <button onClick={doNiimbot} style={{display:"block",width:"100%",textAlign:"left",padding:"10px 14px",border:"none",background:"none",cursor:"pointer",fontSize:13,fontFamily:"inherit"}}>🖨️ Imprimir directo en B1</button>}
-          <button onClick={doPDF} style={{display:"block",width:"100%",textAlign:"left",padding:"10px 14px",border:"none",background:"none",cursor:"pointer",fontSize:13,fontFamily:"inherit"}}>📄 Generar PDF / ventana de impresión</button>
-          {!hasWebBT && <div style={{padding:"8px 14px",fontSize:11,color:"#94a3b8",borderTop:"1px solid #f1f5f9"}}>Web Bluetooth no disponible en este navegador. Usa Chrome en Android/Mac o Bluefy en iPhone.</div>}
+    <>
+      <Btn small={small} onClick={generateImages}>🖨️ Imprimir etiqueta</Btn>
+      {imgModal && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.7)",zIndex:3000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={()=>setImgModal(null)}>
+          <div style={{background:"#fff",borderRadius:16,padding:24,maxWidth:400,width:"100%",maxHeight:"88vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+              <h3 style={{margin:0,fontSize:16,fontWeight:700}}>Etiquetas listas</h3>
+              <button onClick={()=>setImgModal(null)} style={{background:"none",border:"none",fontSize:20,cursor:"pointer",color:"#94a3b8"}}>✕</button>
+            </div>
+
+            {/* Instructions */}
+            <div style={{background:"#f8fafc",borderRadius:10,padding:12,marginBottom:16,fontSize:13,color:"#475569",lineHeight:1.6}}>
+              <strong style={{color:"#000"}}>Cómo imprimir en la Niimbot B1:</strong><br/>
+              1. Mantén presionada la imagen de abajo<br/>
+              2. Toca <strong>"Compartir"</strong> → busca <strong>"NIIMBOT"</strong><br/>
+              3. En la app Niimbot selecciona tu impresora B1<br/>
+              4. Ajusta al tamaño 50×30mm y confirma
+            </div>
+
+            {/* Label images */}
+            {imgModal.images.map((img, i) => (
+              <div key={i} style={{marginBottom:14,textAlign:"center"}}>
+                <div style={{fontSize:11,color:"#94a3b8",marginBottom:6}}>{img.label}</div>
+                <img
+                  src={img.dataUrl}
+                  alt={img.label}
+                  style={{width:"100%",borderRadius:8,border:"1px solid #e2e8f0",display:"block"}}
+                />
+                <a
+                  href={img.dataUrl}
+                  download={`etiqueta-${img.label.replace(/[^a-zA-Z0-9]/g,"-")}.png`}
+                  style={{display:"inline-block",marginTop:8,fontSize:12,color:"#000",fontWeight:600,textDecoration:"underline"}}
+                >
+                  ↓ Descargar imagen
+                </a>
+              </div>
+            ))}
+
+            <div style={{marginTop:12,fontSize:11,color:"#94a3b8",textAlign:"center"}}>
+              La app NIIMBOT debe estar instalada para compartir directo a la impresora
+            </div>
+          </div>
         </div>
       )}
-    </div>
+    </>
   );
 }
 
@@ -300,7 +317,15 @@ function QRScanner({ onScan, onClose }) {
     (async () => {
       const jsQR = await loadJsQR();
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+        // Try rear camera first, fall back to any camera (needed for some iOS versions)
+        let stream;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }
+          });
+        } catch {
+          stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        }
         if (!alive) { stream.getTracks().forEach(t => t.stop()); return; }
         streamRef.current = stream;
         videoRef.current.srcObject = stream;
@@ -376,15 +401,20 @@ function PhotoCapture({ onCapture, onClose }) {
     let alive = true;
     (async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "environment", width: { ideal: 1920 }, height: { ideal: 1080 } }
-        });
+        let stream;
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+          });
+        } catch {
+          stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        }
         if (!alive) { stream.getTracks().forEach(t => t.stop()); return; }
         streamRef.current = stream;
         videoRef.current.srcObject = stream;
         await videoRef.current.play();
         setReady(true);
-      } catch { setErr("No se pudo acceder a la cámara. Revisa los permisos del navegador."); }
+      } catch { setErr("No se pudo acceder a la cámara. Revisa los permisos del navegador en Ajustes → Safari → Cámara."); }
     })();
     return () => { alive = false; streamRef.current?.getTracks().forEach(t => t.stop()); };
   }, []);
@@ -510,41 +540,87 @@ const SEED_PRODUCTS = [
 const loadStore = () => {
   try {
     const raw = localStorage.getItem(STORE_KEY);
-    // Try migrating from old keys
-    if (!raw) {
-      const old = localStorage.getItem("inv_data_v2") || localStorage.getItem("inv_data_v3");
-      if (old) {
-        const saved = JSON.parse(old);
-        // Clean barrier BT/MON-P from migrated data
-        saved.products = (saved.products||[]).filter(p => {
-          if (isBarrier(p.marca)) {
-            if (p.serial?.startsWith("BT") || p.codigo?.startsWith("MON-P")) return false;
-          }
-          return true;
-        });
-        // Barrier products go to staging, not inventory
-        const barrierProducts = saved.products.filter(p => isBarrier(p.marca));
-        saved.products = saved.products.filter(p => !isBarrier(p.marca));
-        const store = { products: saved.products, movements: saved.movements||[], kits: saved.kits||[], barrierStaging: barrierProducts };
-        localStorage.setItem(STORE_KEY, JSON.stringify(store));
-        return store;
-      }
-      // Fresh start
-      const seed = { products: SEED_PRODUCTS, movements: [], kits: [], barrierStaging: [] };
-      localStorage.setItem(STORE_KEY, JSON.stringify(seed));
-      return seed;
+    if (raw) {
+      // Existing data — ONLY additive fixes, never delete products
+      const saved = JSON.parse(raw);
+      if (!saved.kits) saved.kits = [];
+      if (!saved.barrierStaging) saved.barrierStaging = [];
+      if (!saved.movements) saved.movements = [];
+      if (!saved.products) saved.products = [];
+      return saved;
     }
-    const saved = JSON.parse(raw);
-    if (!saved.kits) saved.kits = [];
-    if (!saved.barrierStaging) saved.barrierStaging = [];
-    return saved;
+    // No data yet — fresh install, start with empty store (no seed)
+    // User will import their real data via the backup/restore tool
+    const empty = { products: [], movements: [], kits: [], barrierStaging: [] };
+    localStorage.setItem(STORE_KEY, JSON.stringify(empty));
+    return empty;
   } catch {
-    const seed = { products: SEED_PRODUCTS, movements: [], kits: [], barrierStaging: [] };
-    localStorage.setItem(STORE_KEY, JSON.stringify(seed));
-    return seed;
+    return { products: [], movements: [], kits: [], barrierStaging: [] };
   }
 };
 const saveStore = d => localStorage.setItem(STORE_KEY, JSON.stringify(d));
+
+// ─── Backup / Restore ────────────────────────────────────────────────────────
+function BackupButton({ store, setStore, showToast }) {
+  const [open, setOpen] = useState(false);
+  const fileRef = useRef();
+
+  const doExport = () => {
+    const json = JSON.stringify(store, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `mkj-inventario-${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast("✓ Respaldo descargado");
+    setOpen(false);
+  };
+
+  const doImport = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target.result);
+        if (!data.products) throw new Error("Formato inválido");
+        if (!data.kits) data.kits = [];
+        if (!data.barrierStaging) data.barrierStaging = [];
+        if (!data.movements) data.movements = [];
+        setStore(data);
+        showToast(`✓ Inventario restaurado — ${data.products.length} productos`);
+        setOpen(false);
+      } catch { showToast("Archivo inválido", "error"); }
+    };
+    reader.readAsText(file);
+  };
+
+  return (
+    <>
+      <button onClick={() => setOpen(true)} title="Respaldo" style={{ background:"none", border:"1px solid #333", color:"#888", borderRadius:6, padding:"4px 8px", cursor:"pointer", fontSize:11, letterSpacing:.5 }}>
+        ⬆⬇
+      </button>
+      <Modal open={open} onClose={() => setOpen(false)} title="Respaldo de inventario">
+        <div style={{ display:"flex", flexDirection:"column", gap:14 }}>
+          <div style={{ background:"#f8fafc", borderRadius:10, padding:14, fontSize:13, color:"#475569", lineHeight:1.6 }}>
+            Exporta tu inventario como archivo JSON para guardarlo como respaldo. Si cambias de dispositivo o navegador, impórtalo para restaurar todos tus datos.
+          </div>
+          <Btn onClick={doExport}>⬇ Exportar respaldo (.json)</Btn>
+          <div style={{ borderTop:"1px solid #f1f5f9", paddingTop:14 }}>
+            <div style={{ fontSize:12, fontWeight:600, color:"#64748b", marginBottom:8 }}>Restaurar desde respaldo</div>
+            <input ref={fileRef} type="file" accept=".json" onChange={doImport} style={{ display:"none" }} />
+            <Btn variant="outline" onClick={() => fileRef.current.click()}>⬆ Importar respaldo</Btn>
+          </div>
+          <div style={{ fontSize:11, color:"#dc2626", background:"#fef2f2", borderRadius:8, padding:10 }}>
+            ⚠ Importar un respaldo reemplaza todo el inventario actual. Exporta primero si quieres conservar los datos actuales.
+          </div>
+        </div>
+      </Modal>
+    </>
+  );
+}
 
 // ─── TABS ─────────────────────────────────────────────────────────────────────
 const TABS = ["📥 Entrada","📤 Salida","📦 Inventario","🧩 Kits Barrier","📊 Historial"];
@@ -573,9 +649,12 @@ export default function App() {
           <div style={{ fontWeight:300, fontSize:17, letterSpacing:6, textTransform:"uppercase" }}>TRADE</div>
           <div style={{ fontSize:9, color:"#666", letterSpacing:2, textTransform:"uppercase", marginTop:1 }}>Control de Inventario</div>
         </div>
-        <div style={{ marginLeft:"auto", textAlign:"right" }}>
-          <div style={{ fontSize:20, fontWeight:700 }}>{store.products.filter(p=>p.status==="en_stock").length + (store.kits||[]).filter(k=>k.status==="en_stock").length}</div>
-          <div style={{ fontSize:9, color:"#666", letterSpacing:1, textTransform:"uppercase" }}>en stock</div>
+        <div style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:12 }}>
+          <div style={{ textAlign:"right" }}>
+            <div style={{ fontSize:20, fontWeight:700 }}>{store.products.filter(p=>p.status==="en_stock").length + (store.kits||[]).filter(k=>k.status==="en_stock").length}</div>
+            <div style={{ fontSize:9, color:"#666", letterSpacing:1, textTransform:"uppercase" }}>en stock</div>
+          </div>
+          <BackupButton store={store} setStore={setStore} showToast={showToast} />
         </div>
       </div>
 
