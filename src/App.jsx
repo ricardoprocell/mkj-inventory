@@ -195,105 +195,115 @@ const loadJsQR = (() => {
 function QRScanner({ onScan, onClose }) {
   const videoRef  = useRef(null);
   const canvasRef = useRef(null);
-  const stateRef  = useRef({ stream:null, raf:null, alive:true });
-  const [phase, setPhase] = useState("idle"); // idle | starting | scanning | error
+  const stateRef  = useRef({ stream:null, raf:null, alive:true, jsQR:null });
+  const [phase, setPhase] = useState("starting");
   const [errMsg, setErrMsg] = useState("");
 
-  const stop = useCallback(() => {
-    stateRef.current.alive = false;
-    if (stateRef.current.raf) cancelAnimationFrame(stateRef.current.raf);
-    if (stateRef.current.stream) stateRef.current.stream.getTracks().forEach(t=>t.stop());
-  }, []);
+  useEffect(() => {
+    const state = stateRef.current;
+    state.alive = true;
 
-  useEffect(() => () => stop(), [stop]);
-
-  const start = useCallback(async () => {
-    setPhase("starting");
-    stateRef.current.alive = true;
-    try {
-      const jsQR = await loadJsQR();
-      let stream;
+    // Request camera AND load jsQR simultaneously — do NOT await jsQR before camera
+    const cameraPromise = (async () => {
       const constraints = [
         { video: { facingMode: "environment", width:{ideal:1280}, height:{ideal:720} } },
         { video: { facingMode: "environment" } },
         { video: true },
       ];
       for (const c of constraints) {
-        try { stream = await navigator.mediaDevices.getUserMedia(c); break; } catch {}
+        try { return await navigator.mediaDevices.getUserMedia(c); } catch {}
       }
-      if (!stream) throw new Error("No se pudo acceder a la cámara");
-      if (!stateRef.current.alive) { stream.getTracks().forEach(t=>t.stop()); return; }
-      stateRef.current.stream = stream;
+      throw new Error("No se pudo acceder a la cámara. Ve a Ajustes → Safari → Cámara → Permitir.");
+    })();
+
+    const jsQRPromise = loadJsQR();
+
+    Promise.all([cameraPromise, jsQRPromise]).then(([stream, jsQR]) => {
+      if (!state.alive) { stream.getTracks().forEach(t => t.stop()); return; }
+      state.stream = stream;
+      state.jsQR = jsQR;
       const video = videoRef.current;
+      if (!video) return;
       video.srcObject = stream;
-      await new Promise(res => { video.onloadedmetadata = res; });
-      await video.play();
-      setPhase("scanning");
-      const scan = () => {
-        if (!stateRef.current.alive) return;
-        const v = videoRef.current, c = canvasRef.current;
-        if (v && c && v.readyState >= 2 && v.videoWidth > 0) {
-          c.width = v.videoWidth; c.height = v.videoHeight;
-          const ctx = c.getContext("2d");
-          ctx.drawImage(v, 0, 0);
-          const img = ctx.getImageData(0, 0, c.width, c.height);
-          const code = jsQR(img.data, img.width, img.height, { inversionAttempts:"dontInvert" });
-          if (code?.data) { stop(); onScan(code.data); return; }
-        }
-        stateRef.current.raf = requestAnimationFrame(scan);
+      video.onloadedmetadata = async () => {
+        try { await video.play(); } catch {}
+        if (!state.alive) return;
+        setPhase("scanning");
+        const scan = () => {
+          if (!state.alive) return;
+          const v = videoRef.current, c = canvasRef.current;
+          if (v && c && v.readyState >= 2 && v.videoWidth > 0) {
+            c.width = v.videoWidth; c.height = v.videoHeight;
+            const ctx = c.getContext("2d");
+            ctx.drawImage(v, 0, 0);
+            const img = ctx.getImageData(0, 0, c.width, c.height);
+            const code = state.jsQR(img.data, img.width, img.height, { inversionAttempts:"dontInvert" });
+            if (code?.data) {
+              state.alive = false;
+              stream.getTracks().forEach(t => t.stop());
+              onScan(code.data);
+              return;
+            }
+          }
+          state.raf = requestAnimationFrame(scan);
+        };
+        state.raf = requestAnimationFrame(scan);
       };
-      stateRef.current.raf = requestAnimationFrame(scan);
-    } catch(e) {
+    }).catch(e => {
       setErrMsg(e.message || "Error de cámara");
       setPhase("error");
-    }
-  }, [onScan, stop]);
+    });
 
-  // Auto-start on mount
-  useEffect(() => { start(); }, []);
+    return () => {
+      state.alive = false;
+      if (state.raf) cancelAnimationFrame(state.raf);
+      if (state.stream) state.stream.getTracks().forEach(t => t.stop());
+    };
+  }, []);
 
   return (
     <div style={{position:"fixed",inset:0,background:"#000",zIndex:3000,display:"flex",flexDirection:"column"}}>
       <div style={{background:"#000",padding:"14px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",borderBottom:"1px solid #222"}}>
         <span style={{color:"#fff",fontWeight:700,letterSpacing:1}}>ESCANEAR QR</span>
-        <button onClick={()=>{stop();onClose();}} style={{background:"#222",border:"none",color:"#fff",padding:"8px 16px",borderRadius:6,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>✕ Cerrar</button>
+        <button onClick={()=>{stateRef.current.alive=false;if(stateRef.current.stream)stateRef.current.stream.getTracks().forEach(t=>t.stop());onClose();}} style={{background:"#222",border:"none",color:"#fff",padding:"8px 16px",borderRadius:6,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>✕ Cerrar</button>
       </div>
       <div style={{flex:1,position:"relative",overflow:"hidden"}}>
-        <video ref={videoRef} playsInline muted style={{width:"100%",height:"100%",objectFit:"cover",display:phase==="scanning"?"block":"none"}} />
-        <canvas ref={canvasRef} style={{display:"none"}} />
+        <video ref={videoRef} playsInline muted style={{width:"100%",height:"100%",objectFit:"cover",display:phase==="scanning"?"block":"none"}}/>
+        <canvas ref={canvasRef} style={{display:"none"}}/>
         {phase==="scanning" && (
           <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",pointerEvents:"none"}}>
             <div style={{width:220,height:220,position:"relative"}}>
               {[["top","left"],["top","right"],["bottom","left"],["bottom","right"]].map(([v,h])=>(
                 <div key={v+h} style={{position:"absolute",width:28,height:28,[v]:0,[h]:0,
-                  borderTop:v==="top"?"3px solid #fff":"none",borderBottom:v==="bottom"?"3px solid #fff":"none",
-                  borderLeft:h==="left"?"3px solid #fff":"none",borderRight:h==="right"?"3px solid #fff":"none"}}/>
+                  borderTop:v==="top"?"3px solid #fff":"none",
+                  borderBottom:v==="bottom"?"3px solid #fff":"none",
+                  borderLeft:h==="left"?"3px solid #fff":"none",
+                  borderRight:h==="right"?"3px solid #fff":"none"}}/>
               ))}
-              <div style={{position:"absolute",left:6,right:6,height:2,background:"rgba(255,255,255,.8)",top:"50%",animation:"scan 1.6s ease-in-out infinite"}}/>
+              <div style={{position:"absolute",left:6,right:6,height:2,background:"rgba(255,255,255,.85)",top:"50%",animation:"scan 1.6s ease-in-out infinite"}}/>
             </div>
           </div>
         )}
-        {(phase==="idle"||phase==="starting") && (
+        {phase==="starting" && (
           <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16}}>
-            <div style={{color:"#fff",fontSize:15}}>Iniciando cámara...</div>
-            <div style={{width:40,height:40,border:"3px solid #333",borderTop:"3px solid #fff",borderRadius:"50%",animation:"spin 1s linear infinite"}}/>
+            <div style={{width:44,height:44,border:"3px solid #333",borderTop:"3px solid #fff",borderRadius:"50%",animation:"spin 1s linear infinite"}}/>
+            <div style={{color:"#fff",fontSize:14}}>Iniciando cámara...</div>
           </div>
         )}
         {phase==="error" && (
-          <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16,padding:24}}>
-            <div style={{color:"#fca5a5",fontSize:14,textAlign:"center"}}>{errMsg}</div>
-            <div style={{color:"#94a3b8",fontSize:12,textAlign:"center"}}>Ajustes → Safari → Cámara → Permitir</div>
-            <button onClick={start} style={{background:"#fff",color:"#000",border:"none",borderRadius:8,padding:"12px 24px",fontFamily:"inherit",fontWeight:700,cursor:"pointer"}}>Reintentar</button>
+          <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:14,padding:28}}>
+            <div style={{fontSize:36}}>📷</div>
+            <div style={{color:"#fca5a5",fontSize:14,textAlign:"center",lineHeight:1.6}}>{errMsg}</div>
+            <button onClick={()=>{setPhase("starting");setErrMsg("");}} style={{background:"#fff",color:"#000",border:"none",borderRadius:8,padding:"12px 24px",fontFamily:"inherit",fontWeight:700,cursor:"pointer",fontSize:14}}>Reintentar</button>
           </div>
         )}
       </div>
       <div style={{background:"#111",padding:"12px",textAlign:"center",color:"#666",fontSize:12,letterSpacing:1}}>Apunta al QR pegado en el producto</div>
-      <style>{`@keyframes scan{0%{top:10%}50%{top:85%}100%{top:10%}} @keyframes spin{to{transform:rotate(360deg)}}`}</style>
+      <style>{`@keyframes scan{0%{top:10%}50%{top:85%}100%{top:10%}}@keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>
   );
 }
 
-// ─── Photo Capture ────────────────────────────────────────────────────────────
 function PhotoCapture({ onCapture, onClose }) {
   const videoRef  = useRef(null);
   const canvasRef = useRef(null);
