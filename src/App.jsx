@@ -11,28 +11,34 @@ const SPREADSHEET_ID  = "1PXEUiwnv1pkKrIxwj69FBRSXwKL3m9z05Dlxt24jhBk";
 const db = {
   async call(action, payload = {}) {
     if (APPS_SCRIPT_URL === "PASTE_YOUR_APPS_SCRIPT_URL_HERE") {
-      // Fallback to localStorage while Apps Script not configured
       return dbLocal.call(action, payload);
     }
     try {
+      // Use GET for read operations (no CORS preflight), POST for writes
+      if (action === "getAll") {
+        const res = await fetch(`${APPS_SCRIPT_URL}?action=getAll`);
+        return await res.json();
+      }
       const res = await fetch(APPS_SCRIPT_URL, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "text/plain" }, // text/plain avoids CORS preflight
         body: JSON.stringify({ action, ...payload }),
       });
       return await res.json();
-    } catch {
+    } catch(e) {
+      console.warn("Sheets unavailable, using local:", e.message);
       return dbLocal.call(action, payload);
     }
   },
-  getAll:      ()       => db.call("getAll"),
-  saveProduct: (p)      => db.call("saveProduct", { product: p }),
-  updateProduct:(id, f) => db.call("updateProduct", { id, fields: f }),
-  saveKit:     (k)      => db.call("saveKit", { kit: k }),
-  updateKit:   (id, f)  => db.call("updateKit", { id, fields: f }),
-  saveStaging: (parts)  => db.call("saveStaging", { parts }),
-  removeStaging:(ids)   => db.call("removeStaging", { ids }),
-  logMovement: (m)      => db.call("logMovement", { movement: m }),
+  getAll:       ()       => db.call("getAll"),
+  saveProduct:  (p)      => db.call("saveProduct",  { product: p }),
+  updateProduct:(id, f)  => db.call("updateProduct",{ id, fields: f }),
+  saveKit:      (k)      => db.call("saveKit",      { kit: k }),
+  updateKit:    (id, f)  => db.call("updateKit",    { id, fields: f }),
+  saveStaging:  (parts)  => db.call("saveStaging",  { parts }),
+  removeStaging:(ids)    => db.call("removeStaging",{ ids }),
+  logMovement:  (m)      => db.call("logMovement",  { movement: m }),
+  bulkLoad:     (data)   => db.call("bulkLoad",     { data }),
 };
 
 // ─── LocalStorage fallback (works offline / before Apps Script setup) ─────────
