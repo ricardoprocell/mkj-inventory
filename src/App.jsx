@@ -3,7 +3,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 // ─────────────────────────────────────────────────────────────────────────────
 // CONFIGURATION
 // After deploying the Apps Script, paste the URL here:
-const APPS_SCRIPT_URL = "PASTE_YOUR_APPS_SCRIPT_URL_HERE";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzYx-dBxo7_oktqUV-Yg6bUR0T1JEDZ0PGrudpMIOgegUxhpy9VS_HCXvDkDsTAJ8A/exec";
 const SPREADSHEET_ID  = "1PXEUiwnv1pkKrIxwj69FBRSXwKL3m9z05Dlxt24jhBk";
 // ─────────────────────────────────────────────────────────────────────────────
 
