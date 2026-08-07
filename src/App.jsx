@@ -398,10 +398,13 @@ export default function App() {
   const showToast = (msg,type="success") => { setToast({msg,type}); setTimeout(()=>setToast(null),3500); };
 
   useEffect(() => {
-    db.get().then(d => {
-      if (d) { setData(d); setSheetsOK(true); }
-      setLoading(false);
-    }).catch(() => setLoading(false));
+    // Show app immediately — never block on Sheets
+    setLoading(false);
+    // Load Sheets in background with timeout
+    const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 8000));
+    Promise.race([db.get(), timeout])
+      .then(d => { if (d) { setData(d); setSheetsOK(true); } })
+      .catch(() => { /* Sheets unavailable — app works with empty state */ });
   }, []);
 
   // Optimistic state updaters
