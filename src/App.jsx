@@ -403,7 +403,8 @@ REGLAS:
     })
   });
   const d = await r.json();
-  if (d.error) throw new Error(d.error.message || "API error");
+  if (d.error) throw new Error(`API: ${d.error.message || JSON.stringify(d.error)}`);
+  if (!d.content) throw new Error(`Sin respuesta: ${JSON.stringify(d)}`);
   return d.content?.find(b=>b.type==="text")?.text || "";
 }
 
@@ -512,6 +513,7 @@ function EntradaTab({ctx}) {
   const [imageData, setImageData] = useState(null);
   const [parsing, setParsing] = useState(false);
   const [parsed, setParsed] = useState(null);
+  const [parseError, setParseError] = useState("");
   const [printQueue, setPrintQueue] = useState(null);
   const [importText, setImportText] = useState("");
   const [form, setForm] = useState({marca:"",codigo:"",descripcion:"",seriales:"",lote:""});
@@ -547,13 +549,17 @@ function EntradaTab({ctx}) {
   };
 
   const parsePhoto = async (img) => {
-    setParsing(true); setParsed(null); setMode("photo");
+    setParsing(true); setParsed(null); setParseError(""); setMode("photo");
     try {
       const base64 = img.split(",")[1];
       const mediaType = img.split(";")[0].split(":")[1];
       const text = await callClaude(base64, mediaType);
-      setParsed(JSON.parse(text.replace(/```json|```/g,"").trim()));
-    } catch { showToast("Error al procesar imagen","error"); }
+      const cleaned = text.replace(/```json|```/g,"").trim();
+      const result = JSON.parse(cleaned);
+      setParsed(result);
+    } catch(e) {
+      setParseError(e.message || String(e));
+    }
     setParsing(false);
   };
 
@@ -677,9 +683,10 @@ function EntradaTab({ctx}) {
           {!parsing && !parsed && imageData && (
             <div style={{background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:8,padding:14}}>
               <div style={{fontWeight:600,color:"#dc2626",marginBottom:6}}>⚠ No se pudieron extraer datos</div>
-              <div style={{color:"#64748b",fontSize:13,marginBottom:12}}>La imagen puede estar borrosa o el formato no es reconocible.</div>
+              <div style={{color:"#64748b",fontSize:13,marginBottom:4}}>Error: {parseError||"desconocido"}</div>
+              <div style={{color:"#94a3b8",fontSize:11,marginBottom:12,fontFamily:"monospace",wordBreak:"break-all"}}>{parseError}</div>
               <div style={{display:"flex",gap:10}}>
-                <Btn small onClick={()=>{setParsing(true);parsePhoto(imageData);}}>Reintentar análisis</Btn>
+                <Btn small onClick={()=>parsePhoto(imageData)}>Reintentar análisis</Btn>
                 <Btn small variant="outline" onClick={()=>setCamera(true)}>📷 Nueva foto</Btn>
               </div>
             </div>
