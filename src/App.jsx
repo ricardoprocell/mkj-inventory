@@ -569,29 +569,86 @@ function EntradaTab({ctx}) {
       {mode==="photo" && (
         <Card>
           <Btn variant="outline" small onClick={()=>{setMode(null);setImageData(null);setParsed(null);}} style={{marginBottom:12}}>← Volver</Btn>
-          {imageData && <img src={imageData} alt="dn" style={{width:"100%",borderRadius:8,marginBottom:12,maxHeight:240,objectFit:"contain",background:"#f8fafc"}}/>}
-          {parsing && <div style={{color:"#64748b",fontSize:13,padding:"12px 0"}}>⏳ Analizando con IA...</div>}
-          {parsed && (
+
+          {/* Photo preview */}
+          {imageData && (
+            <img src={imageData} alt="delivery note" style={{width:"100%",borderRadius:8,marginBottom:14,maxHeight:260,objectFit:"contain",background:"#f8fafc"}}/>
+          )}
+
+          {/* Parsing state */}
+          {parsing && (
+            <div style={{display:"flex",alignItems:"center",gap:12,padding:"16px 0",color:"#64748b",fontSize:14}}>
+              <div style={{width:20,height:20,border:"2px solid #e2e8f0",borderTop:"2px solid #000",borderRadius:"50%",animation:"spin 1s linear infinite",flexShrink:0}}/>
+              Analizando delivery note con IA...
+              <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+            </div>
+          )}
+
+          {/* Parsed preview — confirm before registering */}
+          {!parsing && parsed && (
             <div>
-              <div style={{fontWeight:700,color:"#16a34a",marginBottom:8}}>✓ Datos extraídos — confirma</div>
-              {parsed.marca?<Badge color="#000" text="#fff">{parsed.marca}</Badge>:<Badge color="#fee2e2" text="#dc2626">Marca no detectada</Badge>}
-              {isBarrier(parsed.marca)&&<div style={{marginTop:8,background:"#fef9c3",border:"1px solid #fde68a",borderRadius:8,padding:"8px 12px",fontSize:12,color:"#854d0e"}}>🧩 Partes Barrier → irán a staging para armar kits</div>}
-              <div style={{marginTop:10}}>
+              <div style={{fontWeight:700,color:"#16a34a",fontSize:15,marginBottom:10}}>✓ Datos extraídos — revisa y confirma</div>
+
+              {/* Marca */}
+              <div style={{marginBottom:12,display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:13,color:"#64748b"}}>Marca:</span>
+                {parsed.marca
+                  ? <Badge color="#000" text="#fff">{parsed.marca}</Badge>
+                  : <Badge color="#fee2e2" text="#dc2626">⚠ Marca no detectada — confirma con Ricardo</Badge>
+                }
+              </div>
+
+              {/* Barrier notice */}
+              {isBarrier(parsed.marca) && (
+                <div style={{marginBottom:12,background:"#fef9c3",border:"1px solid #fde68a",borderRadius:8,padding:"10px 12px",fontSize:12,color:"#854d0e"}}>
+                  🧩 Productos Barrier — irán a <strong>staging</strong> para que armes los kits manualmente
+                </div>
+              )}
+
+              {/* Items preview */}
+              <div style={{marginBottom:14}}>
                 {(parsed.items||[]).map((item,i)=>(
-                  <Card key={i} style={{marginBottom:8,background:"#f8fafc"}}>
-                    <div style={{fontWeight:700}}>{item.codigo_producto}</div>
-                    <div style={{color:"#64748b",fontSize:12,marginBottom:6}}>{item.descripcion}</div>
-                    <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-                      <Badge>{item.cantidad} uds</Badge>
-                      {item.numeros_serie?.map(sn=><Badge key={sn} color="#f0fdf4" text="#15803d">SN:{sn}</Badge>)}
-                      {item.numero_lote&&<Badge color="#fef9c3" text="#854d0e">Lote:{item.numero_lote}</Badge>}
+                  <Card key={i} style={{marginBottom:8,background:"#f8fafc",padding:14}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
+                      <div style={{fontWeight:700,fontSize:14}}>{item.codigo_producto}</div>
+                      <Badge color="#e0f2fe" text="#0369a1">{item.cantidad} ud{item.cantidad!==1?"s":""}</Badge>
+                    </div>
+                    <div style={{color:"#64748b",fontSize:12,marginBottom:8}}>{item.descripcion}</div>
+                    <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                      {item.numeros_serie?.length>0
+                        ? item.numeros_serie.map(sn=><Badge key={sn} color="#f0fdf4" text="#15803d">SN: {sn}</Badge>)
+                        : item.numero_lote
+                          ? <Badge color="#fef9c3" text="#854d0e">Lote: {item.numero_lote}</Badge>
+                          : <Badge color="#f1f5f9" text="#64748b">Sin serial</Badge>
+                      }
                     </div>
                   </Card>
                 ))}
               </div>
-              <div style={{display:"flex",gap:10,marginTop:12}}>
-                <Btn onClick={confirmParsed}>✓ Confirmar y registrar</Btn>
-                <Btn variant="secondary" onClick={()=>{setParsed(null);setImageData(null);setMode(null);}}>Repetir</Btn>
+
+              {/* Action buttons */}
+              <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+                <Btn onClick={confirmParsed}>
+                  ✓ Confirmar y registrar {(parsed.items||[]).reduce((acc,i)=>acc+(i.cantidad||1),0)} unidades
+                </Btn>
+                <Btn variant="outline" onClick={()=>setCamera(true)}>
+                  📷 Tomar otra foto
+                </Btn>
+                <Btn variant="secondary" onClick={()=>{setParsed(null);setImageData(null);setMode(null);}}>
+                  Cancelar
+                </Btn>
+              </div>
+            </div>
+          )}
+
+          {/* Error state — parsing failed */}
+          {!parsing && !parsed && imageData && (
+            <div style={{background:"#fef2f2",border:"1px solid #fca5a5",borderRadius:8,padding:14}}>
+              <div style={{fontWeight:600,color:"#dc2626",marginBottom:6}}>⚠ No se pudieron extraer datos</div>
+              <div style={{color:"#64748b",fontSize:13,marginBottom:12}}>La imagen puede estar borrosa o el formato no es reconocible.</div>
+              <div style={{display:"flex",gap:10}}>
+                <Btn small onClick={()=>{setParsing(true);parsePhoto(imageData);}}>Reintentar análisis</Btn>
+                <Btn small variant="outline" onClick={()=>setCamera(true)}>📷 Nueva foto</Btn>
               </div>
             </div>
           )}
