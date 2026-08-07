@@ -7,9 +7,17 @@ const SPREADSHEET_ID  = "1PXEUiwnv1pkKrIxwj69FBRSXwKL3m9z05Dlxt24jhBk";
 // ─── GOOGLE SHEETS DB ─────────────────────────────────────────────────────────
 const db = {
   async get() {
-    const r = await fetch(`${APPS_SCRIPT_URL}?action=getAll`);
-    const d = await r.json();
-    return d.ok ? d.data : null;
+    try {
+      const r = await fetch(APPS_SCRIPT_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain" },
+        body: JSON.stringify({ action: "getAll" }),
+      });
+      const d = await r.json();
+      return d.ok ? d.data : null;
+    } catch {
+      return null;
+    }
   },
   async post(action, payload = {}) {
     const r = await fetch(APPS_SCRIPT_URL, {
@@ -369,19 +377,34 @@ const Modal = ({open,onClose,title,children}) => {
 // ─── CLAUDE API ───────────────────────────────────────────────────────────────
 async function callClaude(base64, mediaType) {
   const r = await fetch("https://api.anthropic.com/v1/messages", {
-    method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({ model:"claude-sonnet-4-6", max_tokens:1500,
+    method:"POST",
+    headers:{
+      "Content-Type":"application/json",
+      "x-api-key": "",
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true",
+    },
+    body: JSON.stringify({
+      model:"claude-sonnet-4-6",
+      max_tokens:1500,
       system:"Extrae datos de documentos logísticos. Responde solo JSON válido sin markdown.",
       messages:[{role:"user",content:[
         {type:"image",source:{type:"base64",media_type:mediaType,data:base64}},
         {type:"text",text:`Analiza esta delivery note y extrae en JSON:
-{"marca":"fabricante o null","items":[{"codigo_producto":"part number exacto","descripcion":"descripción","cantidad":N,"numeros_serie":["SN1","SN2"],"numero_lote":"lote o null"}]}
-REGLAS: SN:A065|A070→["A065","A070"]. Sin seriales→numero_lote. Barrier: omite BT... y MON-P. Solo JSON.`}
+{"marca":"fabricante o null","items":[{"codigo_producto":"part number exacto","descripcion":"descripción del producto","cantidad":N,"numeros_serie":["SN1","SN2"],"numero_lote":"lote o null"}]}
+REGLAS:
+- codigo_producto: el part number exacto del fabricante (ej: MHD-7, BSM-7, 780198SGS)
+- Si hay seriales tipo SN:A065|A070 → numeros_serie:["A065","A070"]
+- Si hay Lot number sin seriales individuales → numero_lote con el número, numeros_serie:[]
+- Accesorios sin serial ni lote → numeros_serie:[], numero_lote:null
+- Barrier Technologies: omite items con código MON-P y seriales que empiecen con BT
+- Responde SOLO el JSON, sin explicaciones ni markdown`}
       ]}]
     })
   });
   const d = await r.json();
-  return d.content?.find(b=>b.type==="text")?.text||"";
+  if (d.error) throw new Error(d.error.message || "API error");
+  return d.content?.find(b=>b.type==="text")?.text || "";
 }
 
 // ─── TABS ─────────────────────────────────────────────────────────────────────
@@ -398,13 +421,22 @@ export default function App() {
   const showToast = (msg,type="success") => { setToast({msg,type}); setTimeout(()=>setToast(null),3500); };
 
   useEffect(() => {
-    // Show app immediately — never block on Sheets
-    setLoading(false);
-    // Load Sheets in background with timeout
-    const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 8000));
-    Promise.race([db.get(), timeout])
-      .then(d => { if (d) { setData(d); setSheetsOK(true); } })
-      .catch(() => { /* Sheets unavailable — app works with empty state */ });
+    setLoading(false); // show app immediately
+    let cancelled = false;
+    const trySheets = async () => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const timeout = new Promise((_, rej) => setTimeout(()=>rej(new Error("timeout")), 10000));
+          const d = await Promise.race([db.get(), timeout]);
+          if (cancelled) return;
+          if (d) { setData(d); setSheetsOK(true); return; }
+        } catch {
+          if (attempt < 2) await new Promise(r => setTimeout(r, 2000)); // wait 2s before retry
+        }
+      }
+    };
+    trySheets();
+    return () => { cancelled = true; };
   }, []);
 
   // Optimistic state updaters
