@@ -8,24 +8,30 @@ const SPREADSHEET_ID  = "1PXEUiwnv1pkKrIxwj69FBRSXwKL3m9z05Dlxt24jhBk";
 const db = {
   async get() {
     try {
-      const r = await fetch(APPS_SCRIPT_URL, {
-        method: "POST",
-        headers: { "Content-Type": "text/plain" },
-        body: JSON.stringify({ action: "getAll" }),
+      // GET request — no CORS preflight, works from any origin
+      const r = await fetch(`${APPS_SCRIPT_URL}?action=getAll`, {
+        method: "GET",
       });
       const d = await r.json();
       return d.ok ? d.data : null;
-    } catch {
+    } catch(e) {
+      console.warn("Sheets GET failed:", e.message);
       return null;
     }
   },
   async post(action, payload = {}) {
-    const r = await fetch(APPS_SCRIPT_URL, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain" },
-      body: JSON.stringify({ action, ...payload }),
-    });
-    return r.json();
+    try {
+      // POST with text/plain avoids CORS preflight
+      const r = await fetch(APPS_SCRIPT_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain" },
+        body: JSON.stringify({ action, ...payload }),
+      });
+      return r.json();
+    } catch(e) {
+      console.warn("Sheets POST failed:", e.message);
+      return { ok: false, error: e.message };
+    }
   },
   saveProduct:  (p)     => db.post("saveProduct",  { product: p }),
   updateProduct:(id, f) => db.post("updateProduct",{ id, fields: f }),
@@ -377,34 +383,30 @@ const Modal = ({open,onClose,title,children}) => {
 // ─── CLAUDE API ───────────────────────────────────────────────────────────────
 async function callClaude(base64, mediaType) {
   const r = await fetch("https://api.anthropic.com/v1/messages", {
-    method:"POST",
-    headers:{
-      "Content-Type":"application/json",
-      "x-api-key": "",
-      "anthropic-version": "2023-06-01",
-      "anthropic-dangerous-direct-browser-access": "true",
-    },
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      model:"claude-sonnet-4-6",
-      max_tokens:1500,
-      system:"Extrae datos de documentos logísticos. Responde solo JSON válido sin markdown.",
-      messages:[{role:"user",content:[
-        {type:"image",source:{type:"base64",media_type:mediaType,data:base64}},
-        {type:"text",text:`Analiza esta delivery note y extrae en JSON:
+      model: "claude-sonnet-4-6",
+      max_tokens: 1500,
+      system: "Extrae datos de documentos logísticos. Responde solo JSON válido sin markdown.",
+      messages: [{role:"user", content:[
+        {type:"image", source:{type:"base64", media_type:mediaType, data:base64}},
+        {type:"text", text:`Analiza esta delivery note y extrae en JSON:
 {"marca":"fabricante o null","items":[{"codigo_producto":"part number exacto","descripcion":"descripción del producto","cantidad":N,"numeros_serie":["SN1","SN2"],"numero_lote":"lote o null"}]}
 REGLAS:
-- codigo_producto: el part number exacto del fabricante (ej: MHD-7, BSM-7, 780198SGS)
-- Si hay seriales tipo SN:A065|A070 → numeros_serie:["A065","A070"]
-- Si hay Lot number sin seriales individuales → numero_lote con el número, numeros_serie:[]
+- codigo_producto: part number exacto del fabricante (ej: MHD-7, BSM-7, 780198SGS)
+- Fehling: códigos tipo AAA-0 o AAA-0A (ej: BSM-7, MHD-7, MRB-6B)
+- Sutter: códigos numéricos de 6+ dígitos (ej: 780198SGS)
+- Seriales tipo SN:A065|A070 → numeros_serie:["A065","A070"]
+- Lot number sin seriales → numero_lote con el número, numeros_serie:[]
 - Accesorios sin serial ni lote → numeros_serie:[], numero_lote:null
-- Barrier Technologies: omite items con código MON-P y seriales que empiecen con BT
-- Responde SOLO el JSON, sin explicaciones ni markdown`}
+- Barrier Technologies: omite códigos MON-P y seriales que empiecen con BT
+- Responde SOLO JSON, sin markdown`}
       ]}]
     })
   });
   const d = await r.json();
-  if (d.error) throw new Error(`API: ${d.error.message || JSON.stringify(d.error)}`);
-  if (!d.content) throw new Error(`Sin respuesta: ${JSON.stringify(d)}`);
+  if (d.error) throw new Error(d.error.message || "Error de API");
   return d.content?.find(b=>b.type==="text")?.text || "";
 }
 
@@ -527,7 +529,7 @@ function EntradaTab({ctx}) {
         : item.numero_lote ? Array.from({length:item.cantidad||1},(_,i)=>`${item.numero_lote}-${String(i+1).padStart(3,"0")}`)
         : ["SIN-SERIAL"];
       if (isBarrier(marca)) sns = sns.filter(s=>!s.startsWith("BT"));
-      sns.forEach(sn => out.push({id:makeId(),marca,codigo:item.codigo_producto,descripcion:item.descripcion,serial:sn,qr_data:`COD:${item.codigo_producto}|SN:${sn}`,status:"en_stock",fecha_entrada:nowISO(),fecha_salida:null}));
+      sns.forEach(sn => out.push({id:makeId(),marca,codigo:item.codigo_producto,descripcion:item.descripcion,serial:sn,qr_data:`COD:${item.codigo_producto}|SN:${sn}`,status:"en_stock",fecha_entrada:nowISO(),fecha_salida:null,pedimento:""}));
     });
     return out;
   };
@@ -835,6 +837,51 @@ function SalidaTab({ctx}) {
   );
 }
 
+
+// ─── PEDIMENTO CELL ───────────────────────────────────────────────────────────
+function PedimentoCell({ product, onSave }) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState(product.pedimento || "");
+  const inputRef = useRef();
+
+  useEffect(() => {
+    if (editing && inputRef.current) inputRef.current.focus();
+  }, [editing]);
+
+  const save = () => {
+    setEditing(false);
+    if (val !== (product.pedimento || "")) onSave(val);
+  };
+
+  if (editing) return (
+    <div style={{display:"flex",alignItems:"center",gap:4}}>
+      <input
+        ref={inputRef}
+        value={val}
+        onChange={e=>setVal(e.target.value.toUpperCase())}
+        onBlur={save}
+        onKeyDown={e=>{if(e.key==="Enter")save();if(e.key==="Escape"){setVal(product.pedimento||"");setEditing(false);}}}
+        style={{border:"1.5px solid #000",borderRadius:4,padding:"3px 6px",fontSize:11,fontFamily:"monospace",width:100,outline:"none"}}
+        placeholder="Código..."
+      />
+    </div>
+  );
+
+  return (
+    <div
+      onClick={()=>setEditing(true)}
+      style={{cursor:"pointer",display:"flex",alignItems:"center",gap:4,minWidth:80}}
+      title="Clic para editar pedimento"
+    >
+      {val
+        ? <span style={{fontSize:11,fontFamily:"monospace",color:"#0f172a",fontWeight:600}}>{val}</span>
+        : <span style={{fontSize:11,color:"#cbd5e1",fontStyle:"italic"}}>+ Agregar</span>
+      }
+      <span style={{fontSize:10,color:"#cbd5e1"}}>✏️</span>
+    </div>
+  );
+}
+
 // ─── INVENTARIO TAB ───────────────────────────────────────────────────────────
 function InventarioTab({ctx}) {
   const {data,mut,showToast} = ctx;
@@ -907,7 +954,7 @@ function InventarioTab({ctx}) {
         <div style={{overflowX:"auto"}}>
           <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
             <thead><tr style={{background:"#f8fafc",borderBottom:"1px solid #e2e8f0"}}>
-              {["Marca","Código","Descripción","Serial","Estado","Entrada","Acciones"].map(h=>(
+              {["Marca","Código","Descripción","Serial","Pedimento","Estado","Entrada","Acciones"].map(h=>(
                 <th key={h} style={{padding:"10px 12px",textAlign:"left",fontWeight:600,color:"#64748b",fontSize:11,whiteSpace:"nowrap"}}>{h}</th>
               ))}
             </tr></thead>
@@ -929,6 +976,9 @@ function InventarioTab({ctx}) {
                   </td>
                   <td style={{padding:"9px 12px",color:"#475569",maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={p.descripcion}>{p.descripcion}</td>
                   <td style={{padding:"9px 12px",fontFamily:"monospace",fontSize:11}}>{p.serial}</td>
+                  <td style={{padding:"9px 12px"}}>
+                    <PedimentoCell product={p} onSave={(val)=>mut.updateProduct(p.id,{pedimento:val})}/>
+                  </td>
                   <td style={{padding:"9px 12px"}}><Badge color={p.status==="en_stock"?"#dcfce7":"#fef9c3"} text={p.status==="en_stock"?"#16a34a":"#854d0e"}>{p.status==="en_stock"?"En stock":"Vendido"}</Badge></td>
                   <td style={{padding:"9px 12px",color:"#64748b",fontSize:11,whiteSpace:"nowrap"}}>{new Date(p.fecha_entrada).toLocaleDateString("es-MX")}</td>
                   <td style={{padding:"9px 12px"}}><Btn small variant="outline" onClick={()=>setQrModal(p)}>Ver QR</Btn></td>
