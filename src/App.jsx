@@ -382,32 +382,15 @@ const Modal = ({open,onClose,title,children}) => {
 
 // ─── CLAUDE API ───────────────────────────────────────────────────────────────
 async function callClaude(base64, mediaType) {
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
+  // Proxy through Apps Script — API key stays secure on Google servers
+  const r = await fetch(APPS_SCRIPT_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens: 1500,
-      system: "Extrae datos de documentos logísticos. Responde solo JSON válido sin markdown.",
-      messages: [{role:"user", content:[
-        {type:"image", source:{type:"base64", media_type:mediaType, data:base64}},
-        {type:"text", text:`Analiza esta delivery note y extrae en JSON:
-{"marca":"fabricante o null","items":[{"codigo_producto":"part number exacto","descripcion":"descripción del producto","cantidad":N,"numeros_serie":["SN1","SN2"],"numero_lote":"lote o null"}]}
-REGLAS:
-- codigo_producto: part number exacto del fabricante (ej: MHD-7, BSM-7, 780198SGS)
-- Fehling: códigos tipo AAA-0 o AAA-0A (ej: BSM-7, MHD-7, MRB-6B)
-- Sutter: códigos numéricos de 6+ dígitos (ej: 780198SGS)
-- Seriales tipo SN:A065|A070 → numeros_serie:["A065","A070"]
-- Lot number sin seriales → numero_lote con el número, numeros_serie:[]
-- Accesorios sin serial ni lote → numeros_serie:[], numero_lote:null
-- Barrier Technologies: omite códigos MON-P y seriales que empiecen con BT
-- Responde SOLO JSON, sin markdown`}
-      ]}]
-    })
+    headers: { "Content-Type": "text/plain" },
+    body: JSON.stringify({ action: "analyzeImage", base64, mediaType }),
   });
   const d = await r.json();
-  if (d.error) throw new Error(d.error.message || "Error de API");
-  return d.content?.find(b=>b.type==="text")?.text || "";
+  if (!d.ok) throw new Error(d.error || "Error al analizar imagen");
+  return JSON.stringify(d.data);
 }
 
 // ─── TABS ─────────────────────────────────────────────────────────────────────
