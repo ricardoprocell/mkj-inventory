@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzYx-dBxo7_oktqUV-Yg6bUR0T1JEDZ0PGrudpMIOgegUxhpy9VS_HCXvDkDsTAJ8A/exec";
-const SPREADSHEET_ID  = "1PXEUiwnv1pkKrIxwj69FBRSXwKL3m9z05Dlxt24jhBk";
+const APPS_SCRIPT_URL   = "https://script.google.com/macros/s/AKfycbzYx-dBxo7_oktqUV-Yg6bUR0T1JEDZ0PGrudpMIOgegUxhpy9VS_HCXvDkDsTAJ8A/exec";
+const ANALYZE_URL       = "https://script.google.com/macros/s/AKfycbxErToIHCeDxyALBA1v4FOe0Itfeebg_61yh0cL0GibfM5SZ70oFcpTTQOGcavl6LmC/exec";
+const SPREADSHEET_ID    = "1PXEUiwnv1pkKrIxwj69FBRSXwKL3m9z05Dlxt24jhBk";
 
 // ─── GOOGLE SHEETS DB ─────────────────────────────────────────────────────────
 const db = {
@@ -383,7 +384,7 @@ const Modal = ({open,onClose,title,children}) => {
 // ─── CLAUDE API ───────────────────────────────────────────────────────────────
 async function callClaude(base64, mediaType) {
   // Proxy through Apps Script — API key stays secure on Google servers
-  const r = await fetch(APPS_SCRIPT_URL, {
+  const r = await fetch(ANALYZE_URL, {
     method: "POST",
     headers: { "Content-Type": "text/plain" },
     body: JSON.stringify({ action: "analyzeImage", base64, mediaType }),
