@@ -4,6 +4,89 @@ import { useState, useRef, useEffect, useCallback } from "react";
 const APPS_SCRIPT_URL   = "https://script.google.com/macros/s/AKfycbzYx-dBxo7_oktqUV-Yg6bUR0T1JEDZ0PGrudpMIOgegUxhpy9VS_HCXvDkDsTAJ8A/exec";
 const ANALYZE_URL       = "https://script.google.com/macros/s/AKfycbxErToIHCeDxyALBA1v4FOe0Itfeebg_61yh0cL0GibfM5SZ70oFcpTTQOGcavl6LmC/exec";
 const SPREADSHEET_ID    = "1PXEUiwnv1pkKrIxwj69FBRSXwKL3m9z05Dlxt24jhBk";
+// ─── SECURITY ─────────────────────────────────────────────────────────────────
+const APP_PIN           = "MKJ2025";   // Change this PIN to your preferred value
+const SESSION_KEY       = "mkj_auth_session";
+const SESSION_DURATION  = 8 * 60 * 60 * 1000; // 8 hours
+
+function isAuthenticated() {
+  try {
+    const s = JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null");
+    if (!s) return false;
+    if (Date.now() - s.ts > SESSION_DURATION) { sessionStorage.removeItem(SESSION_KEY); return false; }
+    return s.pin === APP_PIN;
+  } catch { return false; }
+}
+
+function setAuthenticated() {
+  sessionStorage.setItem(SESSION_KEY, JSON.stringify({ pin: APP_PIN, ts: Date.now() }));
+}
+
+// ─── PIN LOCK SCREEN ──────────────────────────────────────────────────────────
+function PinLock({ onUnlock }) {
+  const [input, setInput] = useState("");
+  const [error, setError] = useState(false);
+  const [shake, setShake] = useState(false);
+
+  const attempt = (pin) => {
+    if (pin === APP_PIN) {
+      setAuthenticated();
+      onUnlock();
+    } else {
+      setError(true);
+      setShake(true);
+      setInput("");
+      setTimeout(() => { setError(false); setShake(false); }, 1500);
+    }
+  };
+
+  const handleKey = (k) => {
+    if (k === "del") { setInput(v => v.slice(0,-1)); return; }
+    const next = input + k;
+    setInput(next);
+    if (next.length >= APP_PIN.length) attempt(next);
+  };
+
+  return (
+    <div style={{minHeight:"100vh",background:"#000",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:32,padding:24}}>
+      <svg width="64" height="64" viewBox="0 0 52 52" fill="none">
+        <circle cx="26" cy="26" r="23" stroke="#fff" strokeWidth="2" fill="none"/>
+        <text x="7" y="34" fontFamily="Arial" fontWeight="700" fontSize="17" fill="#fff">MKJ</text>
+      </svg>
+      <div style={{fontWeight:300,fontSize:20,letterSpacing:8,color:"#fff",textTransform:"uppercase"}}>TRADE</div>
+
+      {/* PIN dots */}
+      <div style={{display:"flex",gap:16,animation:shake?"shake 0.4s ease":"none"}}>
+        {Array.from({length: APP_PIN.length}).map((_,i)=>(
+          <div key={i} style={{width:14,height:14,borderRadius:"50%",background:i<input.length?"#fff":"transparent",border:"2px solid #fff",transition:"background .15s"}}/>
+        ))}
+      </div>
+      {error && <div style={{color:"#f87171",fontSize:13,letterSpacing:1}}>PIN incorrecto</div>}
+
+      {/* Keypad */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(3,72px)",gap:12}}>
+        {["1","2","3","4","5","6","7","8","9","","0","del"].map((k,i)=>(
+          k===""
+            ? <div key={i}/>
+            : <button key={i} onClick={()=>handleKey(k)} style={{width:72,height:72,borderRadius:"50%",background:k==="del"?"#222":"#1a1a1a",border:"1px solid #333",color:"#fff",fontSize:k==="del"?18:22,fontFamily:"inherit",fontWeight:600,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                {k==="del"?"⌫":k}
+              </button>
+        ))}
+      </div>
+
+      {/* Also support keyboard input */}
+      <input
+        autoFocus
+        value={input}
+        onChange={e=>{ const v=e.target.value; setInput(v); if(v.length>=APP_PIN.length) attempt(v); }}
+        style={{position:"absolute",opacity:0,width:1,height:1}}
+        type="password"
+        maxLength={APP_PIN.length+2}
+      />
+      <style>{`@keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-8px)}75%{transform:translateX(8px)}}`}</style>
+    </div>
+  );
+}
 
 // ─── GOOGLE SHEETS DB ─────────────────────────────────────────────────────────
 const db = {
@@ -22,11 +105,10 @@ const db = {
   },
   async post(action, payload = {}) {
     try {
-      // POST with text/plain avoids CORS preflight
       const r = await fetch(APPS_SCRIPT_URL, {
         method: "POST",
         headers: { "Content-Type": "text/plain" },
-        body: JSON.stringify({ action, ...payload }),
+        body: JSON.stringify({ action, token: APP_PIN, ...payload }),
       });
       return r.json();
     } catch(e) {
@@ -168,7 +250,7 @@ function Camera({ mode, onPhoto, onQR, onClose }) {
         const ctx = c.getContext("2d");
         ctx.drawImage(v, 0, 0);
         const imgData = ctx.getImageData(0, 0, c.width, c.height);
-        const code = jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: "dontInvert" });
+        const code = jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: "attemptBoth" });
         if (code?.data) {
           alive.current = false;
           streamRef.current?.getTracks().forEach(t => t.stop());
@@ -387,7 +469,7 @@ async function callClaude(base64, mediaType) {
   const r = await fetch(ANALYZE_URL, {
     method: "POST",
     headers: { "Content-Type": "text/plain" },
-    body: JSON.stringify({ action: "analyzeImage", base64, mediaType }),
+    body: JSON.stringify({ action: "analyzeImage", token: APP_PIN, base64, mediaType }),
   });
   const d = await r.json();
   if (!d.ok) throw new Error(d.error || "Error al analizar imagen");
@@ -399,16 +481,18 @@ const TABS = ["📥 Entrada","📤 Salida","📦 Inventario","🧩 Kits","📊 H
 
 // ─── APP ──────────────────────────────────────────────────────────────────────
 export default function App() {
+  const [unlocked, setUnlocked] = useState(isAuthenticated);
   const [tab, setTab] = useState(0);
   const [data, setData] = useState({products:[],kits:[],staging:[],movements:[]});
   const [loading, setLoading] = useState(true);
   const [sheetsOK, setSheetsOK] = useState(false);
   const [toast, setToast] = useState(null);
+  const [editorOpen, setEditorOpen] = useState(false);
 
   const showToast = (msg,type="success") => { setToast({msg,type}); setTimeout(()=>setToast(null),3500); };
 
   useEffect(() => {
-    setLoading(false); // show app immediately
+    setLoading(false);
     let cancelled = false;
     const trySheets = async () => {
       for (let attempt = 0; attempt < 3; attempt++) {
@@ -416,9 +500,23 @@ export default function App() {
           const timeout = new Promise((_, rej) => setTimeout(()=>rej(new Error("timeout")), 10000));
           const d = await Promise.race([db.get(), timeout]);
           if (cancelled) return;
-          if (d) { setData(d); setSheetsOK(true); return; }
+          if (d) {
+            // SAFETY: never replace local data with fewer products than we already have
+            setData(prev => {
+              const incomingProducts = d.products?.length || 0;
+              const currentProducts = prev.products?.length || 0;
+              if (incomingProducts < currentProducts) {
+                // Sheets returned fewer products — keep local state, just mark connected
+                setSheetsOK(true);
+                return prev;
+              }
+              setSheetsOK(true);
+              return d;
+            });
+            return;
+          }
         } catch {
-          if (attempt < 2) await new Promise(r => setTimeout(r, 2000)); // wait 2s before retry
+          if (attempt < 2) await new Promise(r => setTimeout(r, 2000));
         }
       }
     };
@@ -440,6 +538,8 @@ export default function App() {
   const staging = data.staging?.length||0;
   const inStock = (data.products||[]).filter(p=>p.status==="en_stock").length + (data.kits||[]).filter(k=>k.status==="en_stock").length;
   const ctx = {data, mut, showToast, setTab};
+
+  if (!unlocked) return <PinLock onUnlock={()=>setUnlocked(true)}/>;
 
   if (loading) return (
     <div style={{minHeight:"100vh",background:"#000",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:20}}>
@@ -466,9 +566,12 @@ export default function App() {
             {sheetsOK?"● GOOGLE SHEETS":"● CONECTANDO..."}
           </div>
         </div>
-        <div style={{marginLeft:"auto",textAlign:"right"}}>
-          <div style={{fontSize:22,fontWeight:700}}>{inStock}</div>
-          <div style={{fontSize:9,color:"#666",letterSpacing:1}}>EN STOCK</div>
+        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:12}}>
+          <div style={{textAlign:"right"}}>
+            <div style={{fontSize:22,fontWeight:700}}>{inStock}</div>
+            <div style={{fontSize:9,color:"#666",letterSpacing:1}}>EN STOCK</div>
+          </div>
+          <button onClick={()=>setEditorOpen(true)} title="Modo Editor" style={{background:"#222",border:"none",color:"#fff",padding:"6px 10px",borderRadius:6,cursor:"pointer",fontSize:14}} >⚙️</button>
         </div>
       </div>
       <div style={{background:"#fff",borderBottom:"1.5px solid #e5e5e5",display:"flex",overflowX:"auto",padding:"0 16px"}}>
@@ -486,6 +589,7 @@ export default function App() {
         {tab===3&&<KitsTab ctx={ctx}/>}
         {tab===4&&<HistorialTab ctx={ctx}/>}
       </div>
+      <EditorModal open={editorOpen} onClose={()=>setEditorOpen(false)} ctx={ctx}/>
       {toast&&<div style={{position:"fixed",bottom:20,right:20,background:toast.type==="success"?"#000":"#dc2626",color:"#fff",padding:"11px 18px",fontSize:13,fontWeight:500,boxShadow:"0 4px 20px rgba(0,0,0,.3)",zIndex:4000,borderLeft:"3px solid #fff",maxWidth:320}}>{toast.msg}</div>}
     </div>
   );
@@ -513,7 +617,7 @@ function EntradaTab({ctx}) {
         : item.numero_lote ? Array.from({length:item.cantidad||1},(_,i)=>`${item.numero_lote}-${String(i+1).padStart(3,"0")}`)
         : ["SIN-SERIAL"];
       if (isBarrier(marca)) sns = sns.filter(s=>!s.startsWith("BT"));
-      sns.forEach(sn => out.push({id:makeId(),marca,codigo:item.codigo_producto,descripcion:item.descripcion,serial:sn,qr_data:`COD:${item.codigo_producto}|SN:${sn}`,status:"en_stock",fecha_entrada:nowISO(),fecha_salida:null,pedimento:""}));
+      sns.forEach(sn => out.push({id:makeId(),marca,codigo:item.codigo_producto,descripcion:item.descripcion,serial:sn,qr_data:`COD:${item.codigo_producto}|SN:${sn}`,status:"en_stock",fecha_entrada:nowISO(),fecha_salida:null,pedimento:"",factura:""}));
     });
     return out;
   };
@@ -822,19 +926,19 @@ function SalidaTab({ctx}) {
 }
 
 
-// ─── PEDIMENTO CELL ───────────────────────────────────────────────────────────
-function PedimentoCell({ product, onSave }) {
+// ─── EDITABLE CELL (pedimento, factura, etc.) ────────────────────────────────
+function PedimentoCell({ product, field = "pedimento", onSave, placeholder = "Código..." }) {
+  const currentVal = product[field] || "";
   const [editing, setEditing] = useState(false);
-  const [val, setVal] = useState(product.pedimento || "");
+  const [val, setVal] = useState(currentVal);
   const inputRef = useRef();
 
-  useEffect(() => {
-    if (editing && inputRef.current) inputRef.current.focus();
-  }, [editing]);
+  useEffect(() => { setVal(product[field] || ""); }, [product, field]);
+  useEffect(() => { if (editing && inputRef.current) inputRef.current.focus(); }, [editing]);
 
   const save = () => {
     setEditing(false);
-    if (val !== (product.pedimento || "")) onSave(val);
+    if (val !== currentVal) onSave(val);
   };
 
   if (editing) return (
@@ -842,26 +946,160 @@ function PedimentoCell({ product, onSave }) {
       <input
         ref={inputRef}
         value={val}
-        onChange={e=>setVal(e.target.value.toUpperCase())}
+        onChange={e=>setVal(e.target.value)}
         onBlur={save}
-        onKeyDown={e=>{if(e.key==="Enter")save();if(e.key==="Escape"){setVal(product.pedimento||"");setEditing(false);}}}
-        style={{border:"1.5px solid #000",borderRadius:4,padding:"3px 6px",fontSize:11,fontFamily:"monospace",width:100,outline:"none"}}
-        placeholder="Código..."
+        onKeyDown={e=>{if(e.key==="Enter")save();if(e.key==="Escape"){setVal(currentVal);setEditing(false);}}}
+        style={{border:"1.5px solid #000",borderRadius:4,padding:"3px 6px",fontSize:11,fontFamily:"monospace",width:110,outline:"none"}}
+        placeholder={placeholder}
       />
     </div>
   );
 
   return (
-    <div
-      onClick={()=>setEditing(true)}
-      style={{cursor:"pointer",display:"flex",alignItems:"center",gap:4,minWidth:80}}
-      title="Clic para editar pedimento"
-    >
+    <div onClick={()=>setEditing(true)} style={{cursor:"pointer",display:"flex",alignItems:"center",gap:4,minWidth:80}} title={`Clic para editar ${field}`}>
       {val
         ? <span style={{fontSize:11,fontFamily:"monospace",color:"#0f172a",fontWeight:600}}>{val}</span>
-        : <span style={{fontSize:11,color:"#cbd5e1",fontStyle:"italic"}}>+ Agregar</span>
-      }
+        : <span style={{fontSize:11,color:"#cbd5e1",fontStyle:"italic"}}>+ Agregar</span>}
       <span style={{fontSize:10,color:"#cbd5e1"}}>✏️</span>
+    </div>
+  );
+}
+
+
+// ─── MODO EDITOR ──────────────────────────────────────────────────────────────
+function EditorModal({ open, onClose, ctx }) {
+  const { data, mut, showToast } = ctx;
+  const [section, setSection] = useState("productos");
+  const [editingProduct, setEditingProduct] = useState(null);
+  const [editFields, setEditFields] = useState({});
+  const [filter, setFilter] = useState("");
+
+  const products = (data.products || []).filter(p =>
+    !filter || [p.codigo, p.serial, p.marca, p.descripcion].some(v => v?.toLowerCase().includes(filter.toLowerCase()))
+  );
+  const movements = [...(data.movements || [])].sort((a,b) => new Date(b.fecha) - new Date(a.fecha));
+
+  const startEdit = (p) => {
+    setEditingProduct(p.id);
+    setEditFields({ marca:p.marca||"", codigo:p.codigo||"", descripcion:p.descripcion||"", serial:p.serial||"", status:p.status||"en_stock", pedimento:p.pedimento||"", factura:p.factura||"" });
+  };
+
+  const saveEdit = () => {
+    mut.updateProduct(editingProduct, editFields);
+    showToast("✓ Producto actualizado");
+    setEditingProduct(null);
+  };
+
+  const deleteProduct = (p) => {
+    if (!window.confirm(`¿Eliminar ${p.codigo} SN:${p.serial}? Esta acción no se puede deshacer.`)) return;
+    mut.updateProduct(p.id, { status: "eliminado", fecha_salida: nowISO() });
+    showToast(`✓ ${p.codigo} eliminado`);
+  };
+
+  const undoSale = (p) => {
+    if (!window.confirm(`¿Deshacer venta de ${p.codigo} SN:${p.serial}? Volverá a estar en stock.`)) return;
+    mut.updateProduct(p.id, { status: "en_stock", fecha_salida: null });
+    showToast(`✓ Venta de ${p.codigo} deshecha`);
+  };
+
+  if (!open) return null;
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.6)",zIndex:4000,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:16,overflowY:"auto"}}>
+      <div style={{background:"#fff",borderRadius:14,width:"100%",maxWidth:800,marginTop:16,marginBottom:16,boxShadow:"0 20px 60px rgba(0,0,0,.3)"}}>
+        <div style={{background:"#000",borderRadius:"14px 14px 0 0",padding:"16px 20px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:18}}>⚙️</span>
+            <span style={{color:"#fff",fontWeight:700,fontSize:16,letterSpacing:.5}}>MODO EDITOR</span>
+            <span style={{background:"#dc2626",color:"#fff",fontSize:10,padding:"2px 8px",borderRadius:10,letterSpacing:.5}}>ADMIN</span>
+          </div>
+          <button onClick={onClose} style={{background:"#333",border:"none",color:"#fff",padding:"6px 14px",borderRadius:6,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>✕ Cerrar</button>
+        </div>
+        <div style={{background:"#fef9c3",padding:"10px 20px",fontSize:12,color:"#854d0e",borderBottom:"1px solid #fde68a"}}>
+          ⚠ Los cambios afectan directamente Google Sheets. Procede con cuidado.
+        </div>
+        <div style={{display:"flex",borderBottom:"1px solid #e2e8f0",padding:"0 20px"}}>
+          {[["productos","📦 Productos"],["movimientos","📊 Movimientos"]].map(([k,label])=>(
+            <button key={k} onClick={()=>setSection(k)} style={{border:"none",background:"none",padding:"12px 16px",cursor:"pointer",fontWeight:section===k?700:400,color:section===k?"#000":"#999",borderBottom:section===k?"2.5px solid #000":"2.5px solid transparent",fontSize:13,fontFamily:"inherit"}}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <div style={{padding:20,maxHeight:"65vh",overflowY:"auto"}}>
+          {section==="productos" && (
+            <div>
+              <Input placeholder="Buscar producto..." value={filter} onChange={e=>setFilter(e.target.value)} style={{marginBottom:14}}/>
+              {products.length===0 && <div style={{color:"#94a3b8",textAlign:"center",padding:20}}>Sin resultados</div>}
+              {products.map(p=>(
+                <div key={p.id} style={{border:"1px solid #e2e8f0",borderRadius:10,marginBottom:10,overflow:"hidden"}}>
+                  {editingProduct===p.id ? (
+                    <div style={{padding:14,background:"#f8fafc"}}>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+                        <Input label="Marca" value={editFields.marca} onChange={e=>setEditFields(f=>({...f,marca:e.target.value}))}/>
+                        <Input label="Código" value={editFields.codigo} onChange={e=>setEditFields(f=>({...f,codigo:e.target.value}))}/>
+                        <Input label="Serial" value={editFields.serial} onChange={e=>setEditFields(f=>({...f,serial:e.target.value}))}/>
+                        <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                          <label style={{fontSize:12,fontWeight:600,color:"#64748b"}}>Estado</label>
+                          <select value={editFields.status} onChange={e=>setEditFields(f=>({...f,status:e.target.value}))} style={{border:"1.5px solid #e2e8f0",borderRadius:8,padding:"8px 12px",fontFamily:"inherit",fontSize:14}}>
+                            <option value="en_stock">En stock</option>
+                            <option value="vendido">Vendido</option>
+                          </select>
+                        </div>
+                        <Input label="Pedimento" value={editFields.pedimento} onChange={e=>setEditFields(f=>({...f,pedimento:e.target.value}))}/>
+                        <Input label="Factura" value={editFields.factura} onChange={e=>setEditFields(f=>({...f,factura:e.target.value}))}/>
+                      </div>
+                      <Input label="Descripción" value={editFields.descripcion} onChange={e=>setEditFields(f=>({...f,descripcion:e.target.value}))} style={{marginBottom:10}}/>
+                      <div style={{display:"flex",gap:8}}>
+                        <Btn small onClick={saveEdit}>✓ Guardar</Btn>
+                        <Btn small variant="secondary" onClick={()=>setEditingProduct(null)}>Cancelar</Btn>
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{padding:"10px 14px",display:"flex",alignItems:"center",gap:10}}>
+                      <div style={{flex:1}}>
+                        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                          <span style={{fontWeight:700,fontSize:13}}>{p.codigo}</span>
+                          <span style={{fontFamily:"monospace",fontSize:11,color:"#64748b"}}>SN:{p.serial}</span>
+                          <Badge color={p.status==="en_stock"?"#dcfce7":p.status==="eliminado"?"#fee2e2":"#fef9c3"} text={p.status==="en_stock"?"#16a34a":p.status==="eliminado"?"#dc2626":"#854d0e"}>
+                            {p.status==="en_stock"?"En stock":p.status==="eliminado"?"Eliminado":"Vendido"}
+                          </Badge>
+                          <span style={{fontSize:11,color:"#94a3b8"}}>{p.marca}</span>
+                        </div>
+                      </div>
+                      <div style={{display:"flex",gap:6,flexShrink:0}}>
+                        <Btn small variant="outline" onClick={()=>startEdit(p)}>✏️ Editar</Btn>
+                        {p.status==="vendido" && <Btn small variant="success" onClick={()=>undoSale(p)}>↩ Deshacer venta</Btn>}
+                        {p.status!=="eliminado" && <Btn small variant="danger" onClick={()=>deleteProduct(p)}>🗑</Btn>}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+          {section==="movimientos" && (
+            <div>
+              <div style={{color:"#64748b",fontSize:12,marginBottom:14}}>Registro histórico de movimientos — solo lectura.</div>
+              {movements.slice(0,40).map((m,i)=>{
+                const cfg = {entrada:{icon:"📥",color:"#dcfce7",text:"#16a34a"},salida:{icon:"📤",color:"#fef9c3",text:"#854d0e"},entrada_barrier:{icon:"🗂️",color:"#dbeafe",text:"#1d4ed8"},kit_creado:{icon:"🧩",color:"#f0fdf4",text:"#166534"}};
+                const c = cfg[m.tipo]||{icon:"•",color:"#f1f5f9",text:"#64748b"};
+                return (
+                  <div key={i} style={{border:"1px solid #e2e8f0",borderRadius:8,padding:"10px 14px",marginBottom:8,display:"flex",gap:10,alignItems:"flex-start"}}>
+                    <span style={{fontSize:18,flexShrink:0}}>{c.icon}</span>
+                    <div style={{flex:1}}>
+                      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:4}}>
+                        <Badge color={c.color} text={c.text}>{m.tipo}</Badge>
+                        <Badge color="#000" text="#fff">{m.marca}</Badge>
+                        <span style={{fontSize:11,color:"#94a3b8"}}>{new Date(m.fecha).toLocaleString("es-MX")}</span>
+                      </div>
+                      <div style={{fontSize:11,color:"#64748b"}}>{m.total} unidad{m.total!==1?"es":""}{m.nota?` · ${m.nota}`:""}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -881,6 +1119,7 @@ function InventarioTab({ctx}) {
   const brands = ["all",...new Set(products.map(p=>p.marca).filter(Boolean))];
   const knownBrands = [...new Set(products.map(p=>p.marca).filter(Boolean))].sort();
   const filtered = products.filter(p=>
+    p.status !== "eliminado" &&
     (brandFilter==="all"||p.marca===brandFilter)&&
     (statusFilter==="all"||p.status===statusFilter)&&
     (!filter||[p.codigo,p.serial,p.descripcion,p.marca].some(v=>v?.toLowerCase().includes(filter.toLowerCase())))
@@ -938,7 +1177,7 @@ function InventarioTab({ctx}) {
         <div style={{overflowX:"auto"}}>
           <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
             <thead><tr style={{background:"#f8fafc",borderBottom:"1px solid #e2e8f0"}}>
-              {["Marca","Código","Descripción","Serial","Pedimento","Estado","Entrada","Acciones"].map(h=>(
+              {["Marca","Código","Descripción","Serial","Pedimento","Factura","Estado","Entrada","Acciones"].map(h=>(
                 <th key={h} style={{padding:"10px 12px",textAlign:"left",fontWeight:600,color:"#64748b",fontSize:11,whiteSpace:"nowrap"}}>{h}</th>
               ))}
             </tr></thead>
@@ -962,6 +1201,9 @@ function InventarioTab({ctx}) {
                   <td style={{padding:"9px 12px",fontFamily:"monospace",fontSize:11}}>{p.serial}</td>
                   <td style={{padding:"9px 12px"}}>
                     <PedimentoCell product={p} onSave={(val)=>mut.updateProduct(p.id,{pedimento:val})}/>
+                  </td>
+                  <td style={{padding:"9px 12px"}}>
+                    <PedimentoCell product={p} field="factura" onSave={(val)=>mut.updateProduct(p.id,{factura:val})}/>
                   </td>
                   <td style={{padding:"9px 12px"}}><Badge color={p.status==="en_stock"?"#dcfce7":"#fef9c3"} text={p.status==="en_stock"?"#16a34a":"#854d0e"}>{p.status==="en_stock"?"En stock":"Vendido"}</Badge></td>
                   <td style={{padding:"9px 12px",color:"#64748b",fontSize:11,whiteSpace:"nowrap"}}>{new Date(p.fecha_entrada).toLocaleDateString("es-MX")}</td>
