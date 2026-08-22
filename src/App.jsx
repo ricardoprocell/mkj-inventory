@@ -5,7 +5,7 @@ const APPS_SCRIPT_URL   = "https://script.google.com/macros/s/AKfycbzYx-dBxo7_ok
 const ANALYZE_URL       = "https://script.google.com/macros/s/AKfycbxErToIHCeDxyALBA1v4FOe0Itfeebg_61yh0cL0GibfM5SZ70oFcpTTQOGcavl6LmC/exec";
 const SPREADSHEET_ID    = "1PXEUiwnv1pkKrIxwj69FBRSXwKL3m9z05Dlxt24jhBk";
 // ─── SECURITY ─────────────────────────────────────────────────────────────────
-const APP_PIN           = "MKJ2025";   // Change this PIN to your preferred value
+const APP_PIN           = "0832967";
 const SESSION_KEY       = "mkj_auth_session";
 const SESSION_DURATION  = 8 * 60 * 60 * 1000; // 8 hours
 
