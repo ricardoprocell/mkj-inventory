@@ -105,7 +105,7 @@ function PinLock({ onUnlock }) {
         onChange={e=>{ if(verifying) return; const v=e.target.value.slice(0,7); setInput(v); if(v.length>=7) attempt(v); }}
         style={{position:"absolute",opacity:0,width:1,height:1}}
         type="password"
-        maxLength={APP_PIN.length+2}
+        maxLength={9}
       />
       <style>{`@keyframes shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-8px)}75%{transform:translateX(8px)}}`}</style>
     </div>
