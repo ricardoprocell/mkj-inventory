@@ -4,22 +4,28 @@ import { useState, useRef, useEffect, useCallback } from "react";
 const APPS_SCRIPT_URL   = "https://script.google.com/macros/s/AKfycbzYx-dBxo7_oktqUV-Yg6bUR0T1JEDZ0PGrudpMIOgegUxhpy9VS_HCXvDkDsTAJ8A/exec";
 const ANALYZE_URL       = "https://script.google.com/macros/s/AKfycbxErToIHCeDxyALBA1v4FOe0Itfeebg_61yh0cL0GibfM5SZ70oFcpTTQOGcavl6LmC/exec";
 const SPREADSHEET_ID    = "1PXEUiwnv1pkKrIxwj69FBRSXwKL3m9z05Dlxt24jhBk";
-// ─── SECURITY ─────────────────────────────────────────────────────────────────
-const APP_PIN           = "0832967";
-const SESSION_KEY       = "mkj_auth_session";
-const SESSION_DURATION  = 8 * 60 * 60 * 1000; // 8 hours
+// ─── SECURITY — PIN validated server-side, never in frontend code ─────────────
+const SESSION_KEY      = "mkj_auth_session";
+const SESSION_DURATION = 8 * 60 * 60 * 1000; // 8 hours
 
 function isAuthenticated() {
   try {
     const s = JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null");
     if (!s) return false;
     if (Date.now() - s.ts > SESSION_DURATION) { sessionStorage.removeItem(SESSION_KEY); return false; }
-    return s.pin === APP_PIN;
+    return s.verified === true;
   } catch { return false; }
 }
 
-function setAuthenticated() {
-  sessionStorage.setItem(SESSION_KEY, JSON.stringify({ pin: APP_PIN, ts: Date.now() }));
+function setAuthenticated(pin) {
+  sessionStorage.setItem(SESSION_KEY, JSON.stringify({ verified: true, ts: Date.now(), token: pin }));
+}
+
+function getSessionToken() {
+  try {
+    const s = JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null");
+    return s?.token || "";
+  } catch { return ""; }
 }
 
 // ─── PIN LOCK SCREEN ──────────────────────────────────────────────────────────
@@ -27,24 +33,41 @@ function PinLock({ onUnlock }) {
   const [input, setInput] = useState("");
   const [error, setError] = useState(false);
   const [shake, setShake] = useState(false);
+  const [verifying, setVerifying] = useState(false);
 
-  const attempt = (pin) => {
-    if (pin === APP_PIN) {
-      setAuthenticated();
-      onUnlock();
-    } else {
+  const attempt = async (pin) => {
+    setVerifying(true);
+    try {
+      const r = await fetch(APPS_SCRIPT_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain" },
+        body: JSON.stringify({ action: "verifyPin", token: pin }),
+      });
+      const d = await r.json();
+      if (d.ok) {
+        setAuthenticated(pin);
+        onUnlock();
+      } else {
+        setError(true);
+        setShake(true);
+        setInput("");
+        setTimeout(() => { setError(false); setShake(false); }, 1500);
+      }
+    } catch {
       setError(true);
       setShake(true);
       setInput("");
       setTimeout(() => { setError(false); setShake(false); }, 1500);
     }
+    setVerifying(false);
   };
 
   const handleKey = (k) => {
+    if (verifying) return;
     if (k === "del") { setInput(v => v.slice(0,-1)); return; }
     const next = input + k;
     setInput(next);
-    if (next.length >= APP_PIN.length) attempt(next);
+    if (next.length >= 7) attempt(next);
   };
 
   return (
@@ -57,11 +80,12 @@ function PinLock({ onUnlock }) {
 
       {/* PIN dots */}
       <div style={{display:"flex",gap:16,animation:shake?"shake 0.4s ease":"none"}}>
-        {Array.from({length: APP_PIN.length}).map((_,i)=>(
+        {Array.from({length: 7}).map((_,i)=>(
           <div key={i} style={{width:14,height:14,borderRadius:"50%",background:i<input.length?"#fff":"transparent",border:"2px solid #fff",transition:"background .15s"}}/>
         ))}
       </div>
-      {error && <div style={{color:"#f87171",fontSize:13,letterSpacing:1}}>PIN incorrecto</div>}
+      {verifying && <div style={{color:"#94a3b8",fontSize:13,letterSpacing:1}}>Verificando...</div>}
+      {error && !verifying && <div style={{color:"#f87171",fontSize:13,letterSpacing:1}}>PIN incorrecto</div>}
 
       {/* Keypad */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(3,72px)",gap:12}}>
@@ -78,7 +102,7 @@ function PinLock({ onUnlock }) {
       <input
         autoFocus
         value={input}
-        onChange={e=>{ const v=e.target.value; setInput(v); if(v.length>=APP_PIN.length) attempt(v); }}
+        onChange={e=>{ if(verifying) return; const v=e.target.value.slice(0,7); setInput(v); if(v.length>=7) attempt(v); }}
         style={{position:"absolute",opacity:0,width:1,height:1}}
         type="password"
         maxLength={APP_PIN.length+2}
@@ -108,7 +132,7 @@ const db = {
       const r = await fetch(APPS_SCRIPT_URL, {
         method: "POST",
         headers: { "Content-Type": "text/plain" },
-        body: JSON.stringify({ action, token: APP_PIN, ...payload }),
+        body: JSON.stringify({ action, token: getSessionToken(), ...payload }),
       });
       return r.json();
     } catch(e) {
@@ -469,7 +493,7 @@ async function callClaude(base64, mediaType) {
   const r = await fetch(ANALYZE_URL, {
     method: "POST",
     headers: { "Content-Type": "text/plain" },
-    body: JSON.stringify({ action: "analyzeImage", token: APP_PIN, base64, mediaType }),
+    body: JSON.stringify({ action: "analyzeImage", token: getSessionToken(), base64, mediaType }),
   });
   const d = await r.json();
   if (!d.ok) throw new Error(d.error || "Error al analizar imagen");
