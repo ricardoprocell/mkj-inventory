@@ -38,24 +38,13 @@ function PinLock({ onUnlock }) {
   const attempt = async (pin) => {
     setVerifying(true);
     let granted = false;
-    // Always try server first
     try {
-      const r = await fetch(APPS_SCRIPT_URL, {
-        method: "POST",
-        headers: { "Content-Type": "text/plain" },
-        body: JSON.stringify({ action: "verifyPin", token: pin }),
-      });
-      const d = await r.json();
-      granted = d.ok === true;
-    } catch {
-      // Server unreachable — fall back to local SHA-256 hash
-      try {
-        const enc = new TextEncoder();
-        const buf = await crypto.subtle.digest("SHA-256", enc.encode(pin));
-        const hex = Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
-        granted = hex === "61bbb8f55759af0916ffa4291790492dffb9e425e6df0932a1a4e4d069068b4b";
-      } catch { granted = false; }
-    }
+      // Primary: validate via SHA-256 hash (PIN never in plaintext in code)
+      const enc = new TextEncoder();
+      const buf = await crypto.subtle.digest("SHA-256", enc.encode(pin));
+      const hex = Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
+      granted = hex === "61bbb8f55759af0916ffa4291790492dffb9e425e6df0932a1a4e4d069068b4b";
+    } catch { granted = false; }
     if (granted) {
       setAuthenticated(pin);
       onUnlock();
