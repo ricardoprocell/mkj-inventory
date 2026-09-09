@@ -383,24 +383,57 @@ function Camera({ mode, onPhoto, onQR, onClose }) {
 const renderLabel = async (item) => {
   const W = 472, H = 283;
   const canvas = document.createElement("canvas");
-  canvas.width = W; canvas.height = H;
+  // 2x resolution for sharp printing
+  canvas.width = W * 2; canvas.height = H * 2;
   const ctx = canvas.getContext("2d");
+  ctx.scale(2, 2);
   ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, W, H);
   ctx.strokeStyle = "#000"; ctx.lineWidth = 2; ctx.strokeRect(1,1,W-2,H-2);
   ctx.strokeStyle = "#ccc"; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(W-235,4); ctx.lineTo(W-235,H-4); ctx.stroke();
   const cod = item.isKit ? (item.name||item.codigo) : item.codigo;
   const sn  = item.isKit ? (item.parts||[]).map(p=>p.serial).join("+") : item.serial;
+  // MKJ header
   ctx.fillStyle = "#aaa"; ctx.font = "bold 12px Arial"; ctx.fillText("MKJ TRADE", 14, 22);
+  // Product code — bold, large
   ctx.fillStyle = "#000"; ctx.font = `bold ${cod.length>10?24:30}px Arial`;
-  ctx.fillText(cod.slice(0,16)+(cod.length>16?"…":""), 14, 80);
-  ctx.fillStyle = "#333"; ctx.font = "19px 'Courier New'";
-  ctx.fillText("SN: "+sn.slice(0,20), 14, 116);
+  ctx.fillText(cod.slice(0,16)+(cod.length>16?"…":""), 14, 72);
+  // Serial — same weight and style as product code for equal sharpness
+  ctx.fillStyle = "#000"; ctx.font = "bold 22px Arial";
+  ctx.fillText("SN: "+sn.slice(0,20), 14, 110);
   const qrDu = await makeQRDataUrl(item.qr_data, 200);
   const qrImg = new Image();
   await new Promise((res,rej)=>{qrImg.onload=res;qrImg.onerror=rej;qrImg.src=qrDu;});
   ctx.drawImage(qrImg, W-228, 18, 210, 210);
   return canvas.toDataURL("image/png");
+};
+
+// Load jsPDF for PDF export
+const loadJsPDF = (() => {
+  let p = null;
+  return () => p || (p = new Promise(res => {
+    if (window.jspdf) return res(window.jspdf.jsPDF);
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+    s.onload = () => res(window.jspdf.jsPDF);
+    document.head.appendChild(s);
+  }));
+})();
+
+const downloadLabelsPDF = async (items) => {
+  const JsPDF = await loadJsPDF();
+  // 50x30mm per label
+  const W = 50, H = 30;
+  const pdf = new JsPDF({ orientation: "landscape", unit: "mm", format: [W, H] });
+  for (let i = 0; i < items.length; i++) {
+    if (i > 0) pdf.addPage([W, H], "landscape");
+    const dataUrl = await renderLabel(items[i]);
+    pdf.addImage(dataUrl, "PNG", 0, 0, W, H);
+  }
+  const name = items.length === 1
+    ? `etiqueta-${items[0].isKit?(items[0].name||items[0].codigo):items[0].codigo}.pdf`
+    : `etiquetas-mkj-${items.length}.pdf`;
+  pdf.save(name);
 };
 
 function PrintButton({ items, small = false }) {
@@ -432,8 +465,9 @@ function PrintButton({ items, small = false }) {
             {modal.map((img,i)=>(
               <div key={i} style={{marginBottom:14,textAlign:"center"}}>
                 <img src={img.dataUrl} alt={img.name} style={{width:"100%",borderRadius:8,border:"1px solid #e2e8f0"}}/>
-                <div style={{marginTop:8}}>
-                  <a href={img.dataUrl} download={`${img.name}-${img.sn}.png`} style={{fontSize:13,color:"#000",fontWeight:700,textDecoration:"underline"}}>↓ Descargar imagen</a>
+                <div style={{marginTop:8,display:"flex",gap:10,justifyContent:"center"}}>
+                  <button onClick={()=>downloadLabelsPDF(items)} style={{fontSize:13,color:"#fff",fontWeight:700,background:"#000",border:"none",borderRadius:6,padding:"8px 16px",cursor:"pointer",fontFamily:"inherit"}}>↓ Descargar PDF</button>
+                  <a href={img.dataUrl} download={`${img.name}-${img.sn}.png`} style={{fontSize:13,color:"#64748b",fontWeight:500,textDecoration:"underline",display:"flex",alignItems:"center"}}>PNG</a>
                 </div>
               </div>
             ))}
@@ -511,45 +545,30 @@ export default function App() {
   useEffect(() => {
     setLoading(false);
     let cancelled = false;
-    const trySheets = async () => {
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          const timeout = new Promise((_, rej) => setTimeout(()=>rej(new Error("timeout")), 10000));
-          const d = await Promise.race([db.get(), timeout]);
-          if (cancelled) return;
-          if (d) {
-            // SAFETY: never replace local data with fewer products than we already have
-            setData(prev => {
-              const incomingProducts = d.products?.length || 0;
-              const currentProducts = prev.products?.length || 0;
-              if (incomingProducts < currentProducts) {
-                // Sheets returned fewer products — keep local state, just mark connected
-                setSheetsOK(true);
-                return prev;
-              }
-              setSheetsOK(true);
-              return d;
-            });
-            return;
-          }
-        } catch {
-          if (attempt < 2) await new Promise(r => setTimeout(r, 2000));
-        }
-      }
-    };
-    trySheets();
+    (async () => {
+      try {
+        const timeout = new Promise((_, rej) => setTimeout(() => rej(), 12000));
+        const d = await Promise.race([db.get(), timeout]);
+        if (cancelled || !d) return;
+        setData(d);
+        setSheetsOK(true);
+      } catch {}
+    })();
     return () => { cancelled = true; };
   }, []);
 
   // Optimistic state updaters
+  const writeQueue = useRef(Promise.resolve());
+  const enqueue = (fn) => { writeQueue.current = writeQueue.current.then(() => fn()).catch(() => {}); };
+
   const mut = {
-    addProduct:     p     => { setData(d=>({...d,products:[...d.products,p]}));                                        db.saveProduct(p); },
-    updateProduct:  (id,f)=> { setData(d=>({...d,products:d.products.map(p=>p.id===id?{...p,...f}:p)}));               db.updateProduct(id,f); },
-    addKit:         k     => { setData(d=>({...d,kits:[...d.kits,k]}));                                                db.saveKit(k); },
-    updateKit:      (id,f)=> { setData(d=>({...d,kits:d.kits.map(k=>k.id===id?{...k,...f}:k)}));                       db.updateKit(id,f); },
-    addStaging:     ps    => { setData(d=>({...d,staging:[...d.staging,...ps]}));                                      db.saveStaging(ps); },
-    removeStaging:  ids   => { setData(d=>({...d,staging:d.staging.filter(p=>!ids.includes(p.id))}));                  db.removeStaging(ids); },
-    logMovement:    m     => { setData(d=>({...d,movements:[...d.movements,m]}));                                      db.logMovement(m); },
+    addProduct:     p     => { setData(d=>({...d,products:[...d.products,p]}));                          enqueue(()=>db.saveProduct(p)); },
+    updateProduct:  (id,f)=> { setData(d=>({...d,products:d.products.map(p=>p.id===id?{...p,...f}:p)})); enqueue(()=>db.updateProduct(id,f)); },
+    addKit:         k     => { setData(d=>({...d,kits:[...d.kits,k]}));                                  enqueue(()=>db.saveKit(k)); },
+    updateKit:      (id,f)=> { setData(d=>({...d,kits:d.kits.map(k=>k.id===id?{...k,...f}:k)}));         enqueue(()=>db.updateKit(id,f)); },
+    addStaging:     ps    => { setData(d=>({...d,staging:[...d.staging,...ps]}));                        enqueue(()=>db.saveStaging(ps)); },
+    removeStaging:  ids   => { setData(d=>({...d,staging:d.staging.filter(p=>!ids.includes(p.id))}));   enqueue(()=>db.removeStaging(ids)); },
+    logMovement:    m     => { setData(d=>({...d,movements:[...d.movements,m]}));                        enqueue(()=>db.logMovement(m)); },
   };
 
   const staging = data.staging?.length||0;
@@ -945,17 +964,40 @@ function SalidaTab({ctx}) {
 
 // ─── EDITABLE CELL (pedimento, factura, etc.) ────────────────────────────────
 function PedimentoCell({ product, field = "pedimento", onSave, placeholder = "Código..." }) {
-  const currentVal = product[field] || "";
+  const savedVal = useRef(product[field] || "");
   const [editing, setEditing] = useState(false);
-  const [val, setVal] = useState(currentVal);
+  const [val, setVal] = useState(product[field] || "");
+  const [display, setDisplay] = useState(product[field] || "");
   const inputRef = useRef();
 
-  useEffect(() => { setVal(product[field] || ""); }, [product, field]);
-  useEffect(() => { if (editing && inputRef.current) inputRef.current.focus(); }, [editing]);
+  // Sync from parent only when NOT editing
+  useEffect(() => {
+    if (!editing) {
+      const v = product[field] || "";
+      savedVal.current = v;
+      setVal(v);
+      setDisplay(v);
+    }
+  }, [product[field]]);
+
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editing]);
 
   const save = () => {
+    const trimmed = val.trim();
     setEditing(false);
-    if (val !== currentVal) onSave(val);
+    setDisplay(trimmed);
+    savedVal.current = trimmed;
+    onSave(trimmed); // always save on exit, even if same value
+  };
+
+  const cancel = () => {
+    setVal(savedVal.current);
+    setEditing(false);
   };
 
   if (editing) return (
@@ -965,19 +1007,19 @@ function PedimentoCell({ product, field = "pedimento", onSave, placeholder = "C�
         value={val}
         onChange={e=>setVal(e.target.value)}
         onBlur={save}
-        onKeyDown={e=>{if(e.key==="Enter")save();if(e.key==="Escape"){setVal(currentVal);setEditing(false);}}}
-        style={{border:"1.5px solid #000",borderRadius:4,padding:"3px 6px",fontSize:11,fontFamily:"monospace",width:110,outline:"none"}}
+        onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();save();}if(e.key==="Escape")cancel();}}
+        style={{border:"1.5px solid #000",borderRadius:4,padding:"4px 8px",fontSize:12,fontFamily:"monospace",width:120,outline:"none",background:"#fff"}}
         placeholder={placeholder}
       />
     </div>
   );
 
   return (
-    <div onClick={()=>setEditing(true)} style={{cursor:"pointer",display:"flex",alignItems:"center",gap:4,minWidth:80}} title={`Clic para editar ${field}`}>
-      {val
-        ? <span style={{fontSize:11,fontFamily:"monospace",color:"#0f172a",fontWeight:600}}>{val}</span>
+    <div onClick={()=>{setVal(display);setEditing(true);}} style={{cursor:"pointer",display:"flex",alignItems:"center",gap:4,minWidth:80,padding:"2px 0"}} title="Toca para editar">
+      {display
+        ? <span style={{fontSize:12,fontFamily:"monospace",color:"#0f172a",fontWeight:600}}>{display}</span>
         : <span style={{fontSize:11,color:"#cbd5e1",fontStyle:"italic"}}>+ Agregar</span>}
-      <span style={{fontSize:10,color:"#cbd5e1"}}>✏️</span>
+      <span style={{fontSize:10,color:"#cbd5e1",opacity:.6}}>✏️</span>
     </div>
   );
 }
